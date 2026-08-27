@@ -49,7 +49,7 @@ The server auto-loads a `.env` file in this directory (via `python-dotenv`),
 so the simplest path is to edit the included `.env`:
 
 ```
-FRESHSALES_DOMAIN=https://intoaec-team.myfreshworks.com/
+FRESHSALES_DOMAIN=https://your-domain.myfreshworks.com/
 FRESHSALES_API_KEY=paste-your-crm-api-key-here
 ```
 
@@ -59,12 +59,12 @@ Just replace `paste-your-crm-api-key-here` with your real **CRM API key**
 Alternatively, set real environment variables — these override `.env`:
 
 ```bash
-export FRESHSALES_DOMAIN="intoaec-team.myfreshworks.com"
+export FRESHSALES_DOMAIN="your-domain.myfreshworks.com"
 export FRESHSALES_API_KEY="your-api-key-here"
 ```
 
 > `FRESHSALES_DOMAIN` accepts either a bare subdomain (`acmecorp`) or a
-> full host like `intoaec-team.myfreshworks.com` — the client detects
+> full host like `your-domain.myfreshworks.com` — the client detects
 > which format you've given it and builds the right base URL.
 
 > Freshsales gives you two API keys: **CRM API** and **Chat (Freshchat) API**.
@@ -95,7 +95,7 @@ A ready-to-copy version with your domain filled in is in
       "command": "python",
       "args": ["/absolute/path/to/freshsales-mcp/server.py"],
       "env": {
-        "FRESHSALES_DOMAIN": "intoaec-team.myfreshworks.com",
+        "FRESHSALES_DOMAIN": "your-domain.myfreshworks.com",
         "FRESHSALES_API_KEY": "paste-your-crm-api-key-here"
       }
     }
