@@ -1,13 +1,10 @@
 {
   "mcpServers": {
-    "freshsales": {
-      "command": "python",
-      "args": [
-        "/absolute/path/to/freshsales-mcp/server.py"
-      ],
-      "env": {
-        "FRESHSALES_DOMAIN": "intoaec-team.myfreshworks.com",
-        "FRESHSALES_API_KEY": "XU4IN1s9TIEO9rq1E2wOPA"
+    "freshsales-remote": {
+      "type": "http",
+      "url": "https://<your-deployment-domain>/mcp",
+      "headers": {
+        "Authorization": "Bearer <your-MCP_AUTH_TOKEN>"
       }
     }
   }

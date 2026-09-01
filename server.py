@@ -1,34 +1,51 @@
 """
-Freshsales MCP Server — full API coverage
+Freshsales MCP Server — Remote HTTP (Streamable HTTP transport)
 
-Exposes every documented Freshsales module (Contacts, Accounts, Deals,
-Leads, Marketing Lists, Tasks, Notes, Appointments, Sales Activities,
-Products/CPQ, Documents/CPQ, Files & Links, Custom Modules, Configuration/
-Selector metadata, Job Status, Phone, and Search) as MCP tools, so an
-MCP-compatible client (Claude Desktop, Claude Code, Cowork, etc.) can be
-used in place of logging into the Freshsales website for day-to-day
-lookups and updates.
+Exposes every documented Freshsales module as MCP tools via a remote
+Streamable-HTTP endpoint at /mcp, suitable for hosting on Railway, Render,
+or Vercel and connecting from Claude Desktop or any remote MCP client.
 
-Setup:
-    1. pip install -r requirements.txt
-    2. Set FRESHSALES_DOMAIN and FRESHSALES_API_KEY (see README.md)
-    3. Run: python server.py
-    4. Point your MCP client config at this script (see README.md)
+Environment variables:
+    FRESHSALES_DOMAIN  — e.g. yourcompany.myfreshworks.com
+    FRESHSALES_API_KEY — Freshsales CRM API key
+    MCP_AUTH_TOKEN     — (optional) Bearer token to protect /mcp
+    ALLOWED_ORIGINS    — comma-separated CORS origins (default: *)
+    PORT               — HTTP port for local dev (default: 8000)
+
+Local dev:
+    uvicorn server:app --reload --port 8000
+
+Vercel / Railway: the `app` variable is the ASGI entry-point.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any, Optional
 
 from dotenv import load_dotenv
-from mcp.server import MCPServer
+from mcp.server.fastmcp import FastMCP
+from starlette.applications import Starlette
+from starlette.middleware import Middleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.cors import CORSMiddleware
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.routing import Mount, Route
 
 from freshsales_client import FreshsalesClient, FreshsalesError
 
 load_dotenv()
 
-mcp = MCPServer("freshsales")
+# Logging — never log API keys, tokens, or sensitive payload data.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
+logger = logging.getLogger("freshsales-mcp")
+
+mcp = FastMCP("freshsales")
 
 _client: Optional[FreshsalesClient] = None
 
@@ -36,6 +53,7 @@ _client: Optional[FreshsalesClient] = None
 def get_client() -> FreshsalesClient:
     global _client
     if _client is None:
+        logger.info("Freshsales client initialized")
         _client = FreshsalesClient()
     return _client
 
@@ -44,8 +62,10 @@ def _safe(fn, *args, **kwargs) -> Any:
     try:
         return fn(*args, **kwargs)
     except FreshsalesError as e:
+        logger.error("Freshsales API error [%s]: %s", e.status_code, str(e))
         return {"error": True, "status_code": e.status_code, "message": str(e), "details": e.body}
     except ValueError as e:
+        logger.error("Invalid argument: %s", str(e))
         return {"error": True, "message": str(e)}
 
 
@@ -780,5 +800,69 @@ def lookup_search(query: str, field: str = "email", entities: str = "contact") -
     return _safe(get_client().lookup_search, query, field, entities)
 
 
+# =======================================================================
+# HTTP Server — Streamable HTTP transport for remote deployment
+# =======================================================================
+
+_MCP_AUTH_TOKEN = os.environ.get("MCP_AUTH_TOKEN", "")
+_ALLOWED_ORIGINS = [
+    o.strip()
+    for o in os.environ.get("ALLOWED_ORIGINS", "*").split(",")
+    if o.strip()
+] or ["*"]
+
+
+class _BearerAuthMiddleware(BaseHTTPMiddleware):
+    """Validate Authorization: Bearer <MCP_AUTH_TOKEN> on every /mcp request.
+    Skipped when MCP_AUTH_TOKEN is not set (useful for local dev).
+    The /health route is always public.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        if request.url.path == "/health":
+            return await call_next(request)
+        if _MCP_AUTH_TOKEN:
+            auth = request.headers.get("Authorization", "")
+            if not auth.startswith("Bearer ") or auth[7:].strip() != _MCP_AUTH_TOKEN:
+                logger.warning(
+                    "Unauthorized MCP request from %s",
+                    getattr(request.client, "host", "unknown"),
+                )
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+        logger.info("MCP %s %s", request.method, request.url.path)
+        return await call_next(request)
+
+
+async def _health(request: Request) -> JSONResponse:
+    """Public health-check — returns {status: ok}."""
+    return JSONResponse({"status": "ok", "server": "freshsales-mcp"})
+
+
+# Build the ASGI app exposed to Vercel / uvicorn / Railway.
+_mcp_asgi = mcp.streamable_http_app()
+
+app = Starlette(
+    routes=[
+        Route("/health", _health),
+        Mount("/mcp", app=_mcp_asgi),
+    ],
+    middleware=[
+        Middleware(_BearerAuthMiddleware),
+        Middleware(
+            CORSMiddleware,
+            allow_origins=_ALLOWED_ORIGINS,
+            allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+            allow_headers=["*"],
+            allow_credentials=len(_ALLOWED_ORIGINS) == 1 and _ALLOWED_ORIGINS[0] != "*",
+        ),
+    ],
+)
+
 if __name__ == "__main__":
-    mcp.run(transport="stdio")
+    import uvicorn
+
+    port = int(os.environ.get("PORT", "8000"))
+    logger.info("Starting Freshsales remote MCP server on http://0.0.0.0:%d", port)
+    logger.info("  Health : http://localhost:%d/health", port)
+    logger.info("  MCP    : http://localhost:%d/mcp", port)
+    uvicorn.run(app, host="0.0.0.0", port=port)
