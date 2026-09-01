@@ -25,7 +25,7 @@ import os
 from typing import Any, Optional
 
 from dotenv import load_dotenv
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer as FastMCP
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -801,49 +801,83 @@ def lookup_search(query: str, field: str = "email", entities: str = "contact") -
 
 
 # =======================================================================
-# HTTP Server — Streamable HTTP transport for remote deployment
+# HTTP Server — Streamable HTTP transport + OAuth 2.0 for Claude Team
 # =======================================================================
 
+from oauth import (  # noqa: E402
+    oauth_metadata, protected_resource_metadata,
+    oauth_authorize, oauth_token,
+    validate_access_token,
+)
+
 _MCP_AUTH_TOKEN = os.environ.get("MCP_AUTH_TOKEN", "")
+_SERVER_URL     = os.environ.get("SERVER_URL", "http://localhost:8000")
 _ALLOWED_ORIGINS = [
     o.strip()
     for o in os.environ.get("ALLOWED_ORIGINS", "*").split(",")
     if o.strip()
 ] or ["*"]
 
+# Paths that must be reachable without a Bearer token
+_PUBLIC_PATHS = {
+    "/health",
+    "/.well-known/oauth-authorization-server",
+    "/.well-known/oauth-protected-resource",
+    "/oauth/authorize",
+    "/oauth/token",
+}
+
 
 class _BearerAuthMiddleware(BaseHTTPMiddleware):
-    """Validate Authorization: Bearer <MCP_AUTH_TOKEN> on every /mcp request.
-    Skipped when MCP_AUTH_TOKEN is not set (useful for local dev).
-    The /health route is always public.
-    """
+    """Accepts either the static MCP_AUTH_TOKEN or a valid OAuth access token."""
 
     async def dispatch(self, request: Request, call_next):
-        if request.url.path == "/health":
+        if request.url.path in _PUBLIC_PATHS:
             return await call_next(request)
-        if _MCP_AUTH_TOKEN:
-            auth = request.headers.get("Authorization", "")
-            if not auth.startswith("Bearer ") or auth[7:].strip() != _MCP_AUTH_TOKEN:
-                logger.warning(
-                    "Unauthorized MCP request from %s",
-                    getattr(request.client, "host", "unknown"),
-                )
-                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+        auth  = request.headers.get("Authorization", "")
+        token = auth[7:].strip() if auth.startswith("Bearer ") else ""
+
+        ok = (
+            (bool(_MCP_AUTH_TOKEN) and token == _MCP_AUTH_TOKEN)
+            or validate_access_token(token)
+        )
+        if not ok:
+            logger.warning(
+                "Unauthorized MCP request from %s",
+                getattr(request.client, "host", "unknown"),
+            )
+            return JSONResponse(
+                {"error": "Unauthorized"},
+                status_code=401,
+                headers={
+                    "WWW-Authenticate": (
+                        f'Bearer realm="{_SERVER_URL}/mcp", '
+                        'error="invalid_token"'
+                    )
+                },
+            )
+
         logger.info("MCP %s %s", request.method, request.url.path)
         return await call_next(request)
 
 
 async def _health(request: Request) -> JSONResponse:
-    """Public health-check — returns {status: ok}."""
+    """Public health-check — never exposes credentials."""
     return JSONResponse({"status": "ok", "server": "freshsales-mcp"})
 
 
-# Build the ASGI app exposed to Vercel / uvicorn / Railway.
 _mcp_asgi = mcp.streamable_http_app()
 
 app = Starlette(
     routes=[
         Route("/health", _health),
+        # OAuth 2.0 discovery + flow
+        Route("/.well-known/oauth-authorization-server", oauth_metadata),
+        Route("/.well-known/oauth-protected-resource", protected_resource_metadata),
+        Route("/oauth/authorize", oauth_authorize, methods=["GET", "POST"]),
+        Route("/oauth/token", oauth_token, methods=["POST"]),
+        # MCP endpoint
         Mount("/mcp", app=_mcp_asgi),
     ],
     middleware=[
@@ -863,6 +897,7 @@ if __name__ == "__main__":
 
     port = int(os.environ.get("PORT", "8000"))
     logger.info("Starting Freshsales remote MCP server on http://0.0.0.0:%d", port)
-    logger.info("  Health : http://localhost:%d/health", port)
-    logger.info("  MCP    : http://localhost:%d/mcp", port)
+    logger.info("  Health    : http://localhost:%d/health", port)
+    logger.info("  MCP       : http://localhost:%d/mcp", port)
+    logger.info("  Authorize : http://localhost:%d/oauth/authorize", port)
     uvicorn.run(app, host="0.0.0.0", port=port)
