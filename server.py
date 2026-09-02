@@ -840,50 +840,38 @@ def _get_request_path(request: Request) -> str:
 
 
 class _BearerAuthMiddleware(BaseHTTPMiddleware):
-    """Accepts either the static MCP_AUTH_TOKEN or a valid OAuth access token."""
+    """
+    Accepts static MCP_AUTH_TOKEN or valid OAuth access token for Bearer auth requests.
+    Non-Bearer requests (OAuth flows, health checks, preflights) pass through to routing.
+    """
 
     async def dispatch(self, request: Request, call_next):
-        logger.info("DEBUG path=%s raw_path=%s scope_path=%s matched=%s", 
-                    request.url.path, 
-                    request.scope.get("raw_path"),
-                    request.scope.get("path"),
-                    request.headers.get("x-matched-path"))
-        path = request.scope.get("path", "")
-        matched = request.headers.get("x-matched-path", "")
-        is_public = (
-            request.method == "OPTIONS"
-            or "/health" in path or "/health" in matched
-            or "/oauth" in path or "/oauth" in matched
-            or "/.well-known" in path or "/.well-known" in matched
-        )
-        if is_public:
+        if request.method == "OPTIONS":
             return await call_next(request)
 
-        auth  = request.headers.get("Authorization", "")
-        token = auth[7:].strip() if auth.startswith("Bearer ") else ""
-
-        ok = (
-            (bool(_MCP_AUTH_TOKEN) and token == _MCP_AUTH_TOKEN)
-            or validate_access_token(token)
-        )
-        if not ok:
-            logger.warning(
-                "Unauthorized MCP request [%s] from %s",
-                path,
-                getattr(request.client, "host", "unknown"),
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            token = auth[7:].strip()
+            ok = (
+                (bool(_MCP_AUTH_TOKEN) and token == _MCP_AUTH_TOKEN)
+                or validate_access_token(token)
             )
-            return JSONResponse(
-                {"error": "Unauthorized"},
-                status_code=401,
-                headers={
-                    "WWW-Authenticate": (
-                        f'Bearer realm="{_SERVER_URL}/mcp", '
-                        'error="invalid_token"'
-                    )
-                },
-            )
+            if not ok:
+                logger.warning(
+                    "Unauthorized MCP Bearer token from %s",
+                    getattr(request.client, "host", "unknown"),
+                )
+                return JSONResponse(
+                    {"error": "Unauthorized"},
+                    status_code=401,
+                    headers={
+                        "WWW-Authenticate": (
+                            f'Bearer realm="{_SERVER_URL}/mcp", '
+                            'error="invalid_token"'
+                        )
+                    },
+                )
 
-        logger.info("MCP %s %s", request.method, path)
         return await call_next(request)
 
 
