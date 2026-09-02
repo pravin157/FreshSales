@@ -26,6 +26,7 @@ from typing import Any, Optional
 
 from dotenv import load_dotenv
 from mcp.server.mcpserver import MCPServer as FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -880,7 +881,13 @@ async def _health(request: Request) -> JSONResponse:
     return JSONResponse({"status": "ok", "server": "freshsales-mcp"})
 
 
-_mcp_asgi = mcp.streamable_http_app()
+_mcp_asgi = mcp.streamable_http_app(
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=False,
+        allowed_hosts=["*"],
+        allowed_origins=["*"],
+    )
+)
 
 app = Starlette(
     routes=[
