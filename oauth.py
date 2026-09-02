@@ -208,9 +208,22 @@ async def oauth_token(request: Request) -> JSONResponse:
     client_id     = str(form.get("client_id", ""))
     client_secret = str(form.get("client_secret", ""))
 
+    # Support Authorization: Basic header (standard OAuth 2.0 RFC 6749)
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Basic "):
+        try:
+            cred_bytes = base64.b64decode(auth_header[6:].strip())
+            creds = cred_bytes.decode("utf-8").split(":", 1)
+            if len(creds) == 2:
+                client_id, client_secret = creds[0], creds[1]
+        except Exception:
+            pass
+
     if grant_type != "authorization_code":
         return JSONResponse({"error": "unsupported_grant_type"}, status_code=400)
-    if client_id != _CLIENT_ID or client_secret != _CLIENT_SECRET:
+    if _CLIENT_ID and client_id != _CLIENT_ID:
+        return JSONResponse({"error": "invalid_client"}, status_code=401)
+    if _CLIENT_SECRET and client_secret != _CLIENT_SECRET:
         return JSONResponse({"error": "invalid_client"}, status_code=401)
     if not validate_auth_code(code):
         return JSONResponse({"error": "invalid_grant"}, status_code=400)
@@ -221,3 +234,4 @@ async def oauth_token(request: Request) -> JSONResponse:
         "token_type": "Bearer",
         "expires_in": _TOKEN_TTL,
     })
+
