@@ -828,16 +828,28 @@ _PUBLIC_PATHS = {
 }
 
 
+def _get_request_path(request: Request) -> str:
+    matched = (
+        request.headers.get("x-matched-path")
+        or request.headers.get("x-original-url")
+        or request.headers.get("x-forwarded-uri")
+    )
+    if matched:
+        return matched.split("?")[0]
+    return request.url.path
+
+
 class _BearerAuthMiddleware(BaseHTTPMiddleware):
     """Accepts either the static MCP_AUTH_TOKEN or a valid OAuth access token."""
 
     async def dispatch(self, request: Request, call_next):
-        path = request.url.path
+        path = _get_request_path(request)
         is_public = (
             request.method == "OPTIONS"
             or path in _PUBLIC_PATHS
-            or path.startswith("/oauth/")
-            or path.startswith("/.well-known/")
+            or path == "/health"
+            or path.startswith("/oauth")
+            or path.startswith("/.well-known")
         )
         if is_public:
             return await call_next(request)
@@ -866,7 +878,7 @@ class _BearerAuthMiddleware(BaseHTTPMiddleware):
                 },
             )
 
-        logger.info("MCP %s %s", request.method, request.url.path)
+        logger.info("MCP %s %s", request.method, path)
         return await call_next(request)
 
 
