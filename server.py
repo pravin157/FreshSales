@@ -832,7 +832,7 @@ class _BearerAuthMiddleware(BaseHTTPMiddleware):
     """Accepts either the static MCP_AUTH_TOKEN or a valid OAuth access token."""
 
     async def dispatch(self, request: Request, call_next):
-        if request.url.path in _PUBLIC_PATHS:
+        if request.method == "OPTIONS" or request.url.path in _PUBLIC_PATHS:
             return await call_next(request)
 
         auth  = request.headers.get("Authorization", "")
@@ -867,7 +867,27 @@ async def _health(request: Request) -> JSONResponse:
     return JSONResponse({"status": "ok", "server": "freshsales-mcp"})
 
 
-_mcp_asgi = mcp.streamable_http_app()
+class _MCPAppWrapper:
+    """Ensures both /mcp and /mcp/ (and subpaths) reach the FastMCP streamable app directly without 307 redirects."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            path = scope.get("path", "")
+            if path == "/mcp" or path == "/mcp/":
+                scope = dict(scope)
+                scope["root_path"] = "/mcp"
+                scope["path"] = "/"
+            elif path.startswith("/mcp/"):
+                scope = dict(scope)
+                scope["root_path"] = "/mcp"
+                scope["path"] = path[4:]
+        await self.app(scope, receive, send)
+
+
+_mcp_asgi = _MCPAppWrapper(mcp.streamable_http_app())
 
 app = Starlette(
     routes=[
@@ -877,7 +897,8 @@ app = Starlette(
         Route("/.well-known/oauth-protected-resource", protected_resource_metadata),
         Route("/oauth/authorize", oauth_authorize, methods=["GET", "POST"]),
         Route("/oauth/token", oauth_token, methods=["POST"]),
-        # MCP endpoint
+        # MCP endpoints (both exact /mcp and subpaths without 307 redirects)
+        Route("/mcp", endpoint=_mcp_asgi, methods=["GET", "POST", "DELETE", "OPTIONS"]),
         Mount("/mcp", app=_mcp_asgi),
     ],
     middleware=[
