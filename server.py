@@ -832,7 +832,14 @@ class _BearerAuthMiddleware(BaseHTTPMiddleware):
     """Accepts either the static MCP_AUTH_TOKEN or a valid OAuth access token."""
 
     async def dispatch(self, request: Request, call_next):
-        if request.method == "OPTIONS" or request.url.path in _PUBLIC_PATHS:
+        path = request.url.path
+        is_public = (
+            request.method == "OPTIONS"
+            or path in _PUBLIC_PATHS
+            or path.startswith("/oauth/")
+            or path.startswith("/.well-known/")
+        )
+        if is_public:
             return await call_next(request)
 
         auth  = request.headers.get("Authorization", "")
@@ -844,7 +851,8 @@ class _BearerAuthMiddleware(BaseHTTPMiddleware):
         )
         if not ok:
             logger.warning(
-                "Unauthorized MCP request from %s",
+                "Unauthorized MCP request [%s] from %s",
+                path,
                 getattr(request.client, "host", "unknown"),
             )
             return JSONResponse(
