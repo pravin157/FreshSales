@@ -843,13 +843,18 @@ class _BearerAuthMiddleware(BaseHTTPMiddleware):
     """Accepts either the static MCP_AUTH_TOKEN or a valid OAuth access token."""
 
     async def dispatch(self, request: Request, call_next):
-        path = _get_request_path(request)
+        logger.info("DEBUG path=%s raw_path=%s scope_path=%s matched=%s", 
+                    request.url.path, 
+                    request.scope.get("raw_path"),
+                    request.scope.get("path"),
+                    request.headers.get("x-matched-path"))
+        path = request.scope.get("path", "")
+        matched = request.headers.get("x-matched-path", "")
         is_public = (
             request.method == "OPTIONS"
-            or path in _PUBLIC_PATHS
-            or path == "/health"
-            or path.startswith("/oauth")
-            or path.startswith("/.well-known")
+            or "/health" in path or "/health" in matched
+            or "/oauth" in path or "/oauth" in matched
+            or "/.well-known" in path or "/.well-known" in matched
         )
         if is_public:
             return await call_next(request)
